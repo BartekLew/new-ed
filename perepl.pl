@@ -2,29 +2,20 @@
 
 use strict;
 use warnings;
+use Term::ReadLine;
 
 my $PROMPT = "\n> ";
-
-sub readcmd {
-    my $cmd = "";
-    
-    while(my $line = <STDIN>) {
-        if($line =~ m/^(.*)\\$/) {
-           $cmd .= "$1 ";
-        } else {
-           $cmd .= $line;
-           last;
-        }
-    }
-
-    return $cmd;
-}
+my $reader = Term::ReadLine->new('SmartPrompt');
+my $out = $reader->OUT || \*STDOUT;
 
 while(1) {
     print $PROMPT;
-    my $line = readcmd();
+    my $line = $reader->readline($PROMPT);
 
-    last unless $line;
+    last unless defined $line;
+
+    $reader->addhistory($line)
+        if $line =~ m/S/;
 
     eval $line;
     if($@) {
