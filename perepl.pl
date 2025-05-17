@@ -41,6 +41,37 @@ sub File::read {
 
 }
 
+sub Selection::new {
+    my ($class, $back, $match, $front) = @_;
+
+    return bless {
+        back => $back,
+        match => $match,
+        front => $front
+    } => $class;
+}
+
+sub Selection::tag {
+    my ($self) = @_;
+
+    $self->{back} =~ m/\n([^\n]*)$/s;
+    my $backself = $1 // "";
+
+    $self->{front} =~ m/^([^\n]*)/s;
+    my $frontself = $1 // "";
+
+    return "'$backself<$self->{match}>$frontself'";
+}
+
+sub Selection::extend {
+    my ($self, $pattern) = @_;
+
+    if($self->{front} =~ $pattern) {
+        $self->{match} .= $` . $&;
+        $self->{front} = $';
+    }
+}
+
 my $CURRENT_FILE;
 sub edit {
     my ($name) = @_;
@@ -58,18 +89,11 @@ sub sel {
     my $done = "";
     my $rest = $CURRENT_FILE->read();
     while($rest && $rest =~ $selector) {
-        my $ctx = { back => $`, match => $&, front => $' };
+        my $ctx = Selection->new($`, $&, $');
         
-        $ctx->{back} =~ m/\n([^\n]*)$/s;
-        my $backctx = $1 // "";
+        print "\nmatched " . $ctx->tag() . "\n";
 
-        $ctx->{front} =~ m/^([^\n]*)/s;
-        my $frontctx = $1 // "";
-
-        print "\nmatched '$backctx<$ctx->{match}>$frontctx'\n";
-
-        local $_ = $ctx;
-        while(defined readeval("$ctx->{match}>")) {}
+        while(defined readeval("$ctx->{match}>", $ctx)) {}
 
         $done .= $ctx->{back};
         $rest = $ctx->{front};
@@ -77,9 +101,9 @@ sub sel {
 }
 
 sub readeval {
-    my($prompt) = @_;
+    my($prompt, $ctx) = @_;
 
-    my $ctx = $_;
+    $ctx //= $_;
 
     my $line = $reader->readline($prompt);
 
