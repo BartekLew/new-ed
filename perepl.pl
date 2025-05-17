@@ -18,11 +18,9 @@ sub File::new {
 sub File::tag {
     my ($self) = @_;
 
-    if(stat $self->{name}) {
-        return "$self->{name}"
-    } else {
-        return "$self->{name}<new>";
-    }
+    return ($self->{changed}?"*":"") 
+         . $self->{name}
+         . (stat $self->{name}? "" : "<new>");
 }
 
 sub File::read {
@@ -38,29 +36,72 @@ sub File::read {
     };
 
     return $self->{content};
+}
 
+sub File::modify {
+    my ($self, $val) = @_;
+
+    $self->{content} = $val;
+    $self->{changed} = 1;
+
+    return $self;
+}
+
+sub File::save {
+    my ($self) = @_;
+
+    open(my $fh, ">$self->{name}")
+        or die "Can't open '$self->{name}' for writing";
+
+    print $fh $self->{content};
+
+    delete $self->{changed};
+
+    close($fh);
 }
 
 sub Selection::new {
-    my ($class, $back, $match, $front) = @_;
+    my ($class, $base, $pattern) = @_;
 
     return bless {
-        back => $back,
-        match => $match,
-        front => $front
+        base => $base,
+        pattern => $pattern,
+
+        back => "",
+        match => "",
+        front => $base->read()
     } => $class;
+}
+
+sub Selection::next {
+    my ($self) = @_;
+
+    if ($self->{front} && $self->{front} =~ $self->{pattern}) {
+        $self->{back} .= $self->{match} . $`;
+        $self->{match} = $&;
+        $self->{front} = $';
+    } else {
+        $self->{back} = $self->{match} . $self->{front};
+        $self->{match} = $self->{front} = "";
+    }
+
+    return $self;
 }
 
 sub Selection::tag {
     my ($self) = @_;
 
-    $self->{back} =~ m/\n([^\n]*)$/s;
-    my $backself = $1 // "";
+    if(defined($self->{match})) {
+        $self->{back} =~ m/\n([^\n]*)$/s;
+        my $backself = $1 // "";
 
-    $self->{front} =~ m/^([^\n]*)/s;
-    my $frontself = $1 // "";
+        $self->{front} =~ m/^([^\n]*)/s;
+        my $frontself = $1 // "";
 
-    return "'$backself<$self->{match}>$frontself'";
+        return "'$backself<$self->{match}>$frontself'";
+    }
+
+    return "end";
 }
 
 sub Selection::extend {
@@ -72,32 +113,49 @@ sub Selection::extend {
     }
 }
 
-my $CURRENT_FILE;
+sub Selection::modify {
+    my ($self, $val) = @_;
+
+    $self->{match} = $val;
+    return $self;
+}
+
+sub Selection::read {
+    my ($self) = @_;
+
+    return $self->{match};
+}
+
+sub Selection::apply {
+    my ($self) = @_;
+
+    $self->{base}->modify($self->{back} . $self->{match} . $self->{front});
+    return $self->{base};
+}
+
+my $CF;
 sub edit {
     my ($name) = @_;
 
-    $CURRENT_FILE = File->new($name);
-    return $CURRENT_FILE->tag();
+    return $CF = File->new($name);
 }
 
 sub sel {
     my ($selector) = @_;
 
     die "You must open a file first (use edit)"
-        unless defined $CURRENT_FILE;
+        unless defined $CF;
 
-    my $done = "";
-    my $rest = $CURRENT_FILE->read();
-    while($rest && $rest =~ $selector) {
-        my $ctx = Selection->new($`, $&, $');
-        
-        print "\nmatched " . $ctx->tag() . "\n";
+    $CF = new Selection($CF, $selector)->next();
+    return $CF->tag();
+}
 
-        while(defined readeval("$ctx->{match}>", $ctx)) {}
-
-        $done .= $ctx->{back};
-        $rest = $ctx->{front};
-    }
+sub apply {
+    die "You must open a file first (use edit)"
+        unless defined $CF;
+    
+    $CF = $CF->apply();
+    return $CF->tag();
 }
 
 sub readeval {
@@ -127,8 +185,8 @@ sub readeval {
 }
 
 sub main_prompt {
-    if(defined $CURRENT_FILE) {
-        return "\n" . $CURRENT_FILE->tag() . "> ";
+    if(defined $CF) {
+        return "\n\$CF=" . $CF->tag() . "> ";
     } else {
         return "\n> ";
     }
