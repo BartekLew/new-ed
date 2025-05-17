@@ -17,8 +17,11 @@ while(1) {
     $reader->addhistory($line)
         if $line =~ m/S/;
 
-    eval $line;
+    my $ans = eval $line;
     if($@) {
         print STDERR $@;
+    } elsif ($ans) {
+        print "\$_ = $ans";
+        $_ = $ans;
     }
 }
