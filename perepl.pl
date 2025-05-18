@@ -80,9 +80,25 @@ sub Selection::next {
         $self->{back} .= $self->{match} . $`;
         $self->{match} = $&;
         $self->{front} = $';
+
+        if(defined $self->{mapper}) {
+            $self->{mapper}->($self);
+        }
     } else {
         $self->{back} = $self->{match} . $self->{front};
         $self->{match} = $self->{front} = "";
+    }
+
+    return $self;
+}
+
+sub Selection::map {
+    my ($self, $mapper) = @_;
+
+    $self->{mapper} = $mapper;
+
+    if($self->{match}) {
+        $mapper->($self);
     }
 
     return $self;
@@ -133,6 +149,31 @@ sub Selection::apply {
     return $self->{base};
 }
 
+sub block {
+    my ($sel) = @_;
+
+    if($sel->{front} =~ m#\{#) {
+        my $nb = $` . $&;
+        my $rest = $';
+
+        my $lev = 1;
+        while($lev > 0 && $rest =~ m/"[^"]*"|'[^']*'|\{|\}/) {
+            $nb .= $` . $&;
+            $rest = $';
+            if($& eq "{") {
+                $lev++;
+            } elsif ($& eq "}") {
+                $lev--;
+            }
+        }
+
+        $sel->{match} .= $nb;
+        $sel->{front} = $rest;
+    }
+
+    return $sel;
+}
+
 my $CF;
 sub edit {
     my ($name) = @_;
@@ -147,7 +188,12 @@ sub sel {
         unless defined $CF;
 
     $CF = new Selection($CF, $selector)->next();
-    return $CF->tag();
+    return $CF;
+}
+
+sub funs {
+    sel('sub\s*[\w:]*');
+    $CF->map(\&block);
 }
 
 sub apply {
@@ -156,6 +202,12 @@ sub apply {
     
     $CF = $CF->apply();
     return $CF->tag();
+}
+
+sub nextm {
+    if($CF) {
+        $CF->next();
+    }
 }
 
 sub readeval {
