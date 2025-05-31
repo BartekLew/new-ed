@@ -5,6 +5,31 @@ use warnings;
 use Term::ReadLine;
 use Data::Dumper;
 
+my $test_start;
+sub test(&) {
+   my ($fun) = @_;
+
+   my ($pack, $fname, $line) = caller(0);
+   $test_start = "$fname:$line";
+
+   $fun->();
+}
+
+sub assert {
+    my ($exp,$ref) = @_;
+
+    my $ans = eval $exp;
+    print "in test $test_start: $@" if $@; 
+
+    if(defined $ref) {
+        print "******\ntest $test_start failed, eval '$exp':\n$ans\nIS NOT EQUAL TO:\n$ref\n******\n"
+            unless $ref eq $ans;
+    } else {
+        print "******\ntest $test_start failed, eval '$exp' returned false\n******\n"
+            unless $ans;
+    }
+}
+
 my $reader = Term::ReadLine->new('SmartPrompt');
 my $out = $reader->OUT || \*STDOUT;
 
@@ -25,7 +50,7 @@ sub File::tag {
 
 sub File::read {
     my ($self) = @_;
-
+   
     unless(defined $self->{content}) {
         open(my $fh, "$self->{name}") 
             or die "Can't open file '$self->{name}' for reading";
@@ -38,6 +63,18 @@ sub File::read {
     return $self->{content};
 }
 
+sub File::append {
+    my ($self, $txt) = @_;
+
+    $self->read()
+        unless(defined($self->{content}));
+
+    $self->{content} .= $txt;
+    $self->{changed} = 1;
+
+    return $self;
+}
+
 sub File::modify {
     my ($self, $val) = @_;
 
@@ -47,7 +84,7 @@ sub File::modify {
     return $self;
 }
 
-sub File::save {
+sub File::apply {
     my ($self) = @_;
 
     open(my $fh, ">$self->{name}")
@@ -120,6 +157,13 @@ sub Selection::tag {
     return "end";
 }
 
+sub Selection::append {
+    my ($self, $txt) = @_;
+
+    $self->{match} .= $txt;
+    return $self;
+}
+
 sub Selection::extend {
     my ($self, $pattern) = @_;
 
@@ -135,6 +179,109 @@ sub Selection::modify {
     $self->{match} = $val;
     return $self;
 }
+
+sub LevelScanner::new {
+    my ($class, %params) = @_;
+
+    $params{openers} = ['\(', '\{', '\[']
+        unless defined $params{openers};
+    $params{closers} = ['\)', '\}', '\]']
+        unless defined $params{closers};
+    $params{ignorables} = ['"(\\\\.|[^"])*"',
+                           "'(\\\\.|[^'])*'"]
+        unless defined $params{ignorables};
+    $params{line_limiters} = [',', ';'];
+
+    for my $type (qw/openers closers ignorables line_limiters/) {
+        $params{$type} = join("|", @{$params{$type}});
+    }
+
+    return bless { %params } => $class;
+}
+
+sub LevelScanner::level_change {
+    my ($self, $text) = @_;
+
+    return 0 if $text =~ m/^\s*$/;
+
+    my $initial = 0;
+    my $dlev = 0;
+    my $terminated = 0;
+    while($text =~ m/$self->{openers}|$self->{closers}|$self->{ignorables}|$self->{line_limiters}/g) {
+        my ($back, $match, $front) = ($`, $&, $');
+
+        next if ($match =~ m/$self->{ignorables}/);
+
+        if($match =~ m/$self->{openers}/) {
+            $terminated = 1 if $front =~ m/^\s*$/;
+
+            $dlev++;
+        } elsif ($match =~ m/$self->{closers}/) {
+            if($back =~ m/^(\s|$self->{closers})*$/) {
+                $terminated = 1 if $front =~ m/^\s*$/ && $match eq '}';
+                $initial--;
+            }
+            $dlev--;
+        } elsif ($match =~ m/$self->{line_limiters}/ && $front =~ m/^\s*$/) {
+            $terminated = 1;
+        } elsif ($match =~ m/$self->{ignorables}/) {
+            print "ignorable: $match\n";
+        }
+    }
+
+    return ($initial, $dlev, $terminated);
+}
+
+my $default_level_scanner = new LevelScanner();
+
+sub Selection::indent {
+    my ($self, $ts) = @_;
+
+    $ts //= 4;
+
+    $self->{match} =~ m/^(\s+)/;
+    my $level = $1? length($1) : 0;
+    my $terminated = 1;
+    my @lines = split(/\n/, $self->{match}); 
+    for(my $ln = 0; $ln < @lines; $ln++) {
+        $lines[$ln] =~ s/^\s+//;
+
+        my ($initial,$dlev,$term) = $default_level_scanner->level_change($lines[$ln]);
+        next unless defined $dlev;
+
+        $level += $initial * $ts;
+        $level -= $ts
+            if(!$terminated && $initial < 0);
+
+        $lines[$ln] = (" " x $level) . $lines[$ln]
+            if $level > 0;
+
+        $level += $ts * $dlev;
+        $level += $ts * ($terminated - $term)
+            unless(!$terminated && $initial < 0);
+
+        $terminated = $term;
+    }
+
+    $self->{match} = join("\n", @lines);
+    return $self->{match};
+}
+
+test {
+    sub test_indent {
+        my ($text, $result) = @_;
+
+        $text =~ s/'/\\'/g;
+        assert("(bless {match=>'$text'} => 'Selection')->indent()", $result);
+    }
+
+    test_indent("  foo\nbar, baz;\n", 
+                "  foo\n      bar, baz;");
+    test_indent("sub foo {\n my \$bar = \$_;\n     }",
+                "sub foo {\n    my \$bar = \$_;\n}");
+    test_indent("sub foo {\n my \$bar = '\\}';\nassert_eq(\$foo,\n'\\}'\n);\n}",
+                "sub foo {\n    my \$bar = '\\}';\n    assert_eq(\$foo,\n        '\\}'\n    );\n}");
+};
 
 sub Selection::read {
     my ($self) = @_;
@@ -194,6 +341,17 @@ sub sel {
 sub funs {
     sel('sub\s*[\w:]*');
     $CF->map(\&block);
+}
+
+sub append {
+    if(ref($CF) eq "Selection") {
+        my $txt = "";
+        while(defined(my $line = $reader->readline('"'))) {
+            $txt .= "$line\n";
+        }
+        
+        $CF->{match} .= $txt;
+    }
 }
 
 sub apply {
