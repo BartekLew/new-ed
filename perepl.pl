@@ -354,11 +354,18 @@ sub append {
     }
 }
 
+my $APPEND_AUTOINDENT = 1;
+
 sub apply {
+    my ($autoindent) = @_;
+
+    $autoindent //= $APPEND_AUTOINDENT;
+
     die "You must open a file first (use edit)"
         unless defined $CF;
     
     $CF = $CF->apply();
+    $CF->indent() if $autoindent;
     return $CF->tag();
 }
 
