@@ -7,12 +7,13 @@ use Data::Dumper;
 
 my $test_start;
 sub test(&) {
-   my ($fun) = @_;
+    my ($fun) = @_;
 
-   my ($pack, $fname, $line) = caller(0);
-   $test_start = "$fname:$line";
+    my ($pack, $fname, $line) = caller(0);
 
-   $fun->();
+    $test_start = "$fname:$line";
+
+    $fun->();
 }
 
 sub assert {
@@ -376,12 +377,31 @@ sub apply {
 
     $autoindent //= $APPEND_AUTOINDENT;
 
-    die "You must open a file first (use edit)"
-        unless defined $CF;
+    return 0 unless defined $CF;
     
     $CF = $CF->apply();
     $CF->indent() if ($autoindent && ref($CF) eq "Selection");
     return $CF->tag();
+}
+
+sub apply_ask {
+    if(ref($CF) eq "File" && $CF->{changed}) {
+        print "There are unsaved changes in '$CF->{name}', do you want to save it? [y/n/c] ";
+        my $ans = <STDIN>;
+
+        return 1 unless $ans && $ans =~ m/\S+/;
+
+        if(lc($&) eq "y") {
+            apply();
+            return 0;
+        } elsif (lc($&) eq "n") {
+            return 0;
+        }
+
+        return 1;
+    }
+
+    apply();
 }
 
 sub nextm {
@@ -424,5 +444,5 @@ sub main_prompt {
     }
 }
 
-while(defined readeval(main_prompt())) {
+while(defined readeval(main_prompt()) || apply_ask()) {
 }
