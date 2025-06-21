@@ -121,6 +121,9 @@ sub Selection::next {
         if(defined $self->{mapper}) {
             $self->{mapper}->($self);
         }
+
+        $self->next()
+            if($self->{filter} && !$self->{filter}->($self));
     } else {
         $self->{back} = $self->{match} . $self->{front};
         $self->{match} = $self->{front} = "";
@@ -139,6 +142,14 @@ sub Selection::map {
     }
 
     return $self;
+}
+
+sub Selection::filter {
+    my ($self, $filter) = @_;
+
+    $self->{filter} = $filter;
+    $self->next()
+        unless $self->{filter}->($self);
 }
 
 sub Selection::tag {
@@ -339,8 +350,12 @@ sub sel {
 }
 
 sub funs {
+    my ($filter) = @_;
+
     sel('sub\s*[\w:]*');
     $CF->map(\&block);
+    $CF->filter(sub { $_[0]->{match} =~ m/sub\s*$filter/ })
+        if defined $filter;
 }
 
 sub append {
@@ -365,7 +380,7 @@ sub apply {
         unless defined $CF;
     
     $CF = $CF->apply();
-    $CF->indent() if $autoindent;
+    $CF->indent() if ($autoindent && ref($CF) eq "Selection");
     return $CF->tag();
 }
 
