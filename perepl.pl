@@ -88,14 +88,16 @@ sub File::modify {
 sub File::apply {
     my ($self) = @_;
 
-    open(my $fh, ">$self->{name}")
-        or die "Can't open '$self->{name}' for writing";
+    if($self->{changed}) {
+        open(my $fh, ">$self->{name}")
+            or die "Can't open '$self->{name}' for writing";
 
-    print $fh $self->{content};
+        print $fh $self->{content};
 
-    delete $self->{changed};
+        delete $self->{changed};
 
-    close($fh);
+        close($fh);
+    }
 }
 
 sub Selection::new {
@@ -381,7 +383,7 @@ sub apply {
     
     $CF = $CF->apply();
     $CF->indent() if ($autoindent && ref($CF) eq "Selection");
-    return $CF->tag();
+    return $CF->tag() if defined($CF);
 }
 
 sub apply_ask {
