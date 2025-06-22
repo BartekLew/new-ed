@@ -234,8 +234,9 @@ sub LevelScanner::level_change {
             if($back =~ m/^(\s|$self->{closers})*$/) {
                 $terminated = 1 if $front =~ m/^\s*$/ && $match eq '}';
                 $initial--;
+            } else {
+                $dlev--;
             }
-            $dlev--;
         } elsif ($match =~ m/$self->{line_limiters}/ && $front =~ m/^\s*$/) {
             $terminated = 1;
         } elsif ($match =~ m/$self->{ignorables}/) {
@@ -295,6 +296,34 @@ test {
                 "sub foo {\n    my \$bar = \$_;\n}");
     test_indent("sub foo {\n my \$bar = '\\}';\nassert_eq(\$foo,\n'\\}'\n);\n}",
                 "sub foo {\n    my \$bar = '\\}';\n    assert_eq(\$foo,\n        '\\}'\n    );\n}");
+    test_indent('sub File::apply {
+my ($self) = @_;
+
+if($self->{changed}) {
+       open(my $fh, ">$self->{name}")
+    or die "Can\'t open \'$self->{name}\' for writing";
+
+print $fh $self->{content};
+
+           delete $self->{changed};
+  }
+
+        close($fh);
+        }',
+        'sub File::apply {
+    my ($self) = @_;
+
+    if($self->{changed}) {
+        open(my $fh, ">$self->{name}")
+            or die "Can\'t open \'$self->{name}\' for writing";
+
+        print $fh $self->{content};
+
+        delete $self->{changed};
+    }
+
+    close($fh);
+}')
 };
 
 sub Selection::read {
