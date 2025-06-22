@@ -475,5 +475,13 @@ sub main_prompt {
     }
 }
 
+for my $rc_path ('.perepl', "$ENV{HOME}/.perepl") {
+    if(open(my $rc, $rc_path)) {
+        eval(join("", <$rc>));
+        close($rc);
+    }
+}
+
 while(defined readeval(main_prompt()) || apply_ask()) {
 }
+
