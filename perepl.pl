@@ -16,6 +16,56 @@ sub test(&) {
     $fun->();
 }
 
+sub Result::ok {
+    my ($val) = @_;
+
+    return bless {val => $val} => "Result";
+}
+
+sub Result::failed {
+    my ($msg) = @_;
+
+    return bless { err => $msg } => "Result";
+}
+
+sub Result::terminate {
+    my ($exit_code) = @_;
+    return bless { terminate => 0 } => "Result";
+}
+
+sub Result::map {
+    my ($self, $fun) = @_;
+
+    if(defined $self->{val}) {
+        local $_ = $self->{val};
+        $self->{val} = $fun->();
+    }
+
+    return $self;
+}
+
+sub Result::unwrap {
+    my ($self) = @_;
+
+    return $self->{val} if(defined $self->{val});
+    
+    die $self->{err} // "Unknow error"
+        if defined($self->{err});
+
+    exit($self->{terminate});
+}
+
+sub Result::unwrap_or {
+    my ($self, $default) = @_;
+
+    return $self->{val} if(defined $self->{val});
+    exit($self->{terminate})
+        if(defined($self->{terminate}));
+
+    return $default->() if (ref($default) eq "CODE");
+    return $default;
+}
+
 sub assert {
     my ($exp,$ref) = @_;
 
@@ -521,19 +571,23 @@ sub apply_ask {
         print "There are unsaved changes in '$CF->{name}', do you want to save it? [y/n/c] ";
         my $ans = <STDIN>;
 
-        return 1 unless $ans && $ans =~ m/\S+/;
+        return Result::ok() unless $ans && $ans =~ m/\S+/;
 
         if(lc($&) eq "y") {
             apply();
-            return 0;
+            return Result::terminate(0);
         } elsif (lc($&) eq "n") {
-            return 0;
+            return Result::terminate(0);
         }
 
-        return 1;
+        return Result::ok();
     }
 
+    return Result::terminate(0)
+        unless $CF;
+
     apply();
+    return Result::ok();
 }
 
 sub nextm {
@@ -542,15 +596,29 @@ sub nextm {
     }
 }
 
-sub readeval {
-    my($prompt, $ctx) = @_;
+sub Prompt::new {
+    my ($class, %params) = @_;
 
-    $ctx //= $_;
+    return bless {%params} => $class;
+}
 
+sub Prompt::run {
+    my($self) = @_;
+
+    my $ctx //= $_;
+
+    my $prompt = ref($self->{prompt}) eq "CODE"? $self->{prompt}->()
+                                               : $self->{prompt} || ">";
     my $line = $reader->readline($prompt);
 
-    return unless defined $line;
-    return "" unless $line;
+    unless(defined $line) {
+        return $self->{on_terminated}->()
+            if ref($self->{on_terminated}) eq "CODE";
+
+        return Result::terminate(0);
+    }
+
+    return Result::ok() unless $line;
     
     $reader->addhistory($line)
         if $line =~ m/S/;
@@ -559,21 +627,13 @@ sub readeval {
     my $ans = eval $line;
     if($@) {
         print STDERR $@;
-        return $@;
+        return Result::failed($@);
     } elsif ($ans) {
         print "\$_ = $ans\n";
         $_ = $ans;
     }
 
-    return $ans;
-}
-
-sub main_prompt {
-    if(defined $CF) {
-        return "\n\$CF=" . $CF->tag() . "> ";
-    } else {
-        return "\n> ";
-    }
+    return Result::ok($ans);
 }
 
 for my $rc_path ('.perepl', "$ENV{HOME}/.perepl") {
@@ -583,6 +643,17 @@ for my $rc_path ('.perepl', "$ENV{HOME}/.perepl") {
     }
 }
 
-while(defined readeval(main_prompt()) || apply_ask()) {
+my $main_prompt = new Prompt(
+    prompt => sub {
+        if(defined $CF) {
+            return "\n\$CF=" . $CF->tag() . "> ";
+        } else {
+            return "\n> ";
+        }
+    },
+    on_terminated => \&apply_ask
+);
+
+while(!defined($main_prompt->run()->{terminate})) {
 }
 
