@@ -31,6 +31,18 @@ sub assert {
     }
 }
 
+sub assert_eq {
+    my ($str,$ref) = @_;
+
+    if(defined $ref) {
+        print "******\ntest $test_start failed :\n$str\nIS NOT EQUAL TO:\n$ref\n******\n"
+            unless $ref eq $str;
+    } else {
+        print "******\ntest $test_start failed returned false\n******\n"
+            unless $str;
+    }
+}
+
 my $reader = Term::ReadLine->new('SmartPrompt');
 my $out = $reader->OUT || \*STDOUT;
 
@@ -79,8 +91,10 @@ sub File::append {
 sub File::modify {
     my ($self, $val) = @_;
 
-    $self->{content} = $val;
-    $self->{changed} = 1;
+    if($self->{content} ne $val) {
+        $self->{content} = $val;
+        $self->{changed} = 1;
+    }
 
     return $self;
 }
@@ -98,6 +112,8 @@ sub File::apply {
 
         close($fh);
     }
+
+    return $self->{base};
 }
 
 sub Selection::new {
@@ -254,7 +270,7 @@ sub Selection::indent {
 
     $ts //= 4;
 
-    $self->{match} =~ m/^(\s+)/;
+    $self->{match} =~ m/^([ \t]+)/;
     my $level = $1? length($1) : 0;
     my $terminated = 1;
     my @lines = split(/\n/, $self->{match}); 
@@ -296,7 +312,8 @@ test {
                 "sub foo {\n    my \$bar = \$_;\n}");
     test_indent("sub foo {\n my \$bar = '\\}';\nassert_eq(\$foo,\n'\\}'\n);\n}",
                 "sub foo {\n    my \$bar = '\\}';\n    assert_eq(\$foo,\n        '\\}'\n    );\n}");
-    test_indent('sub File::apply {
+    test_indent('
+sub File::apply {
 my ($self) = @_;
 
 if($self->{changed}) {
@@ -310,7 +327,8 @@ print $fh $self->{content};
 
         close($fh);
         }',
-        'sub File::apply {
+        '
+sub File::apply {
     my ($self) = @_;
 
     if($self->{changed}) {
@@ -339,30 +357,113 @@ sub Selection::apply {
     return $self->{base};
 }
 
+sub Scanner::new {
+    my ($class, @transitions) = @_;
+
+    my @regex = @transitions[grep { $_ % 2 == 0 } (0..$#transitions)];
+    my @action = @transitions[grep { $_ % 2 == 1 } (0..$#transitions)];
+
+    return bless { actions => \@action,
+                   partial_regex => \@regex,
+                   regex => join("|", map { "($_)" } @regex) }
+        => $class;
+}
+
+sub Scanner::scan {
+    my ($self, $text) = @_;
+
+    return bless { scanner => $self,
+                   back => "",
+                   front => $text } 
+        => 'Scanning';
+}
+
+sub Scanning::step {
+    my ($self) = @_;
+
+    my $s = $self->{scanner};
+    if($self->{front} =~ m/$s->{regex}/) {
+        my ($back, $match, $front) = ($`, $&, $');
+        for(my $tid = 0; $tid < @{$s->{actions}}; $tid++) {
+            if($match =~ m/$s->{partial_regex}->[$tid]/) {
+                $self->{front} = $front;
+                $self->{back} .= $back . $match;
+                return $s->{actions}->[$tid]->($self, $back, $match, $front);
+            } 
+        }
+        die "INTERNAL ERROR: matched '$match', but no TID found";
+    }
+}
+
+sub noop { return 1; }
+
+my $perl_scanner = new Scanner(
+    '\b(m)([/!@#\$])' => sub { # regex
+        my ($ctx, $back, $match, $front) = @_;
+
+        my $delimiter = substr($match, 1);
+        my $base_scanner = $ctx->{scanner};
+        $ctx->{scanner} = new Scanner($delimiter => sub {
+                                                    my ($ctx) = @_;
+                                                    $ctx->{scanner} = $base_scanner;
+                                                });
+        return 1;
+    },
+    '[\$@%]([a-zA-Z0-9_]+|[^{])' => \&noop, # variable
+    '"(\\.|[^"])*"' => \&noop, # double quote
+    "'(\\.|[^'])*'" => \&noop, #single quote
+    "\{" => sub {
+        my($ctx) = @_;
+        $ctx->{level} = ($ctx->{level}//0) + 1;
+        return $ctx->{level};
+    },
+    "\}" => sub {
+        my($ctx) = @_;
+        $ctx->{level} = ($ctx->{level}//0) - 1;
+
+        return $ctx->{level};
+    });
+
 sub block {
     my ($sel) = @_;
 
-    if($sel->{front} =~ m#\{#) {
-        my $nb = $` . $&;
-        my $rest = $';
+    my $proc = $perl_scanner->scan($sel->{front});
 
-        my $lev = 1;
-        while($lev > 0 && $rest =~ m/"[^"]*"|'[^']*'|\{|\}/) {
-            $nb .= $` . $&;
-            $rest = $';
-            if($& eq "{") {
-                $lev++;
-            } elsif ($& eq "}") {
-                $lev--;
-            }
+    while(1) {
+        my $ans = $proc->step();
+        return unless defined $ans;
+
+        if($ans <= 0) {
+            $sel->{match} .= $proc->{back};
+            $sel->{front} = $proc->{front};
+            return $sel;
         }
+    }
+}
 
-        $sel->{match} .= $nb;
-        $sel->{front} = $rest;
+test {
+    sub test_block {
+        my($match, $front, $ref) = @_;
+
+        my $sel = bless { front => $front, match => $match } => 'Selection';
+        my $ans = block($sel);
+        assert_eq($ans->{match}, $ref);
     }
 
-    return $sel;
-}
+    test_block("sub", " { \$' = '}'; } foobar baz", "sub { \$' = '}'; }");
+    test_block("sub", ' { $ans = $` + "}"; } foobar baz', 'sub { $ans = $` + "}"; }');
+    test_block('if($match =~ m/$self->{openers}/) {
+','            $terminated = 1 if $front =~ m/^\s*$/;
+
+            $dlev++;
+        } elsif ($match =~ m/$self->{closers}/) {',
+        'if($match =~ m/$self->{openers}/) {
+            $terminated = 1 if $front =~ m/^\s*$/;
+
+            $dlev++;
+        }');
+    test_block('sub {', ' foo =~ m#}# } foobar', 'sub { foo =~ m#}# }');
+};
 
 my $CF;
 sub edit {
@@ -412,7 +513,7 @@ sub apply {
     
     $CF = $CF->apply();
     $CF->indent() if ($autoindent && ref($CF) eq "Selection");
-    return $CF->tag() if defined($CF);
+    return $CF->tag() if ref($CF);
 }
 
 sub apply_ask {
