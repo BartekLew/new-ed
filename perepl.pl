@@ -596,6 +596,16 @@ sub lines {
         if($filter);
 }
 
+sub line {
+    my ($no) = @_;
+
+    if(defined($CF)) {
+        $no -= $CF->{line} if ref($CF) eq "Selection";
+        sel("[^\n]*\n");
+        while(--$no > 0) { $CF->next() }
+    }
+}
+
 sub funs {
     my ($filter) = @_;
 
@@ -611,8 +621,16 @@ sub append {
         while(defined(my $line = $reader->readline('"'))) {
             $txt .= "$line\n";
         }
-        
+
         $CF->append($txt);
+    }
+}
+
+sub extend {
+    my ($pattern) = @_;
+
+    if(ref($CF) eq "Selection") {
+        $CF->extend($pattern);
     }
 }
 
