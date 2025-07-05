@@ -239,7 +239,7 @@ sub Selection::tag {
     my ($self) = @_;
 
     if(defined($self->{match})) {
-        $self->{back} =~ m/\n([^\n]*)$/s;
+        $self->{back} =~ m/([^\n]*)(?!\n)$/s;
         my $backself = $1 // "";
 
         $self->{front} =~ m/^([^\n]*)/s;
@@ -590,7 +590,7 @@ sub sel {
 sub lines {
     my ($filter) = @_;
 
-    sel("[^\n]+\n");
+    sel("[^\n]+");
     
     $CF->filter(sub { $_[0]->{match} =~ m/$filter/ })
         if($filter);
@@ -612,7 +612,7 @@ sub append {
             $txt .= "$line\n";
         }
         
-        $CF->{match} .= $txt;
+        $CF->append($txt);
     }
 }
 
@@ -663,7 +663,10 @@ sub nextm {
 sub Prompt::new {
     my ($class, %params) = @_;
 
-    return bless {%params} => $class;
+    my $obj = bless {%params} => $class;
+    $obj->{default} //= sub { return Result::ok() };
+
+    return $obj;
 }
 
 sub Prompt::read_command {
@@ -681,7 +684,7 @@ sub Prompt::read_command {
         return Result::terminate(0);
     }
 
-    return Result::ok() unless $line;
+    return $self->{default}->($self) unless $line;
 
     my $proc = $perl_scanner->scan($line);
     while($proc->drain() > 0) {
@@ -734,7 +737,11 @@ my $main_prompt = new Prompt(
             return "\n> ";
         }
     },
-    on_terminated => \&apply_ask
+    on_terminated => \&apply_ask,
+    default => sub {
+        if(defined $CF) { eval "nextm()"; }
+        return Result::ok();
+    }
 );
 
 while(!defined($main_prompt->run()->{terminate})) {
