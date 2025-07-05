@@ -423,6 +423,7 @@ sub Scanner::scan {
     my ($self, $text) = @_;
 
     return bless { scanner => $self,
+                   level => 0,
                    back => "",
                    front => $text } 
         => 'Scanning';
@@ -443,33 +444,61 @@ sub Scanning::step {
         }
         die "INTERNAL ERROR: matched '$match', but no TID found";
     }
+
+    return undef;
+}
+
+sub Scanning::drain {
+    my ($self) = @_;
+
+    while(defined($self->step())) {}
+
+    return $self->{level};
 }
 
 sub noop { return 1; }
 
+sub expect_delimiter {
+    my ($delimiter) = @_;
+
+    return sub {
+        my($ctx, $back, $match, $front) = @_;
+
+        my $base_scanner = $ctx->{scanner};
+        $ctx->{level}++;
+        $ctx->{scanner} = new Scanner('\\.' => \&noop,
+                                      $delimiter => sub {
+                                          my ($ctx) = @_;
+                                          $ctx->{level}--;
+                                          $ctx->{scanner} = $base_scanner;
+                                      });
+    };
+}
 my $perl_scanner = new Scanner(
     '\b(m)([/!@#\$])' => sub { # regex
         my ($ctx, $back, $match, $front) = @_;
 
         my $delimiter = substr($match, 1);
         my $base_scanner = $ctx->{scanner};
+        $ctx->{level}++;
         $ctx->{scanner} = new Scanner($delimiter => sub {
                                                     my ($ctx) = @_;
+                                                    $ctx->{level}--;
                                                     $ctx->{scanner} = $base_scanner;
                                                 });
         return 1;
     },
     '[\$@%]([a-zA-Z0-9_]+|[^{])' => \&noop, # variable
-    '"(\\.|[^"])*"' => \&noop, # double quote
-    "'(\\.|[^'])*'" => \&noop, #single quote
+    '"' => expect_delimiter('"'), # double quote
+    "'" => expect_delimiter("'"), #single quote
     "\{" => sub {
         my($ctx) = @_;
-        $ctx->{level} = ($ctx->{level}//0) + 1;
+        $ctx->{level}++;
         return $ctx->{level};
     },
     "\}" => sub {
         my($ctx) = @_;
-        $ctx->{level} = ($ctx->{level}//0) - 1;
+        $ctx->{level}--;
 
         return $ctx->{level};
     });
@@ -602,13 +631,12 @@ sub Prompt::new {
     return bless {%params} => $class;
 }
 
-sub Prompt::run {
-    my($self) = @_;
-
-    my $ctx //= $_;
+sub Prompt::read_command {
+    my ($self) = @_;
 
     my $prompt = ref($self->{prompt}) eq "CODE"? $self->{prompt}->()
                                                : $self->{prompt} || ">";
+    
     my $line = $reader->readline($prompt);
 
     unless(defined $line) {
@@ -619,7 +647,27 @@ sub Prompt::run {
     }
 
     return Result::ok() unless $line;
-    
+
+    my $proc = $perl_scanner->scan($line);
+    while($proc->drain() > 0) {
+        my $more = $reader->readline("...>");
+        return Result::ok() unless defined $more;
+        
+        $line .= "\n$more";
+        $proc = $perl_scanner->scan($line);
+    }
+
+    return $line;
+}
+
+sub Prompt::run {
+    my($self) = @_;
+
+    my $ctx //= $_;
+
+    my $line = $self->read_command();
+    return $line if ref($line) eq "Result";
+
     $reader->addhistory($line)
         if $line =~ m/S/;
 
