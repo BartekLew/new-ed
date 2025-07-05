@@ -587,6 +587,15 @@ sub sel {
     return $CF;
 }
 
+sub lines {
+    my ($filter) = @_;
+
+    sel("[^\n]+\n");
+    
+    $CF->filter(sub { $_[0]->{match} =~ m/$filter/ })
+        if($filter);
+}
+
 sub funs {
     my ($filter) = @_;
 
