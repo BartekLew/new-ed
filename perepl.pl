@@ -172,6 +172,8 @@ sub Selection::new {
     return bless {
         base => $base,
         pattern => $pattern,
+        line => 1,
+        sel_lines => 0,
 
         back => "",
         match => "",
@@ -179,13 +181,25 @@ sub Selection::new {
     } => $class;
 }
 
+sub Selection::refresh_lines {
+    my ($self) = @_;
+
+    my @in_nls = $self->{match} =~ m/\n/g;
+    $self->{sel_lines} = @in_nls;
+}
+
 sub Selection::next {
     my ($self) = @_;
 
     if ($self->{front} && $self->{front} =~ $self->{pattern}) {
-        $self->{back} .= $self->{match} . $`;
+        my $back = $`;
+        $self->{back} .= $self->{match} . $back;
         $self->{match} = $&;
         $self->{front} = $';
+
+        my @nls = $back =~ m/\n/g;
+        $self->{line} += @nls + $self->{sel_lines};
+        $self->refresh_lines();
 
         if(defined $self->{mapper}) {
             $self->{mapper}->($self);
@@ -231,7 +245,14 @@ sub Selection::tag {
         $self->{front} =~ m/^([^\n]*)/s;
         my $frontself = $1 // "";
 
-        return "'$backself<$self->{match}>$frontself'";
+        if(ref($self->{base}) eq "File") {
+            my @matchlines = split("\n", $self->{match});
+            my $i = $self->{line};
+            my $tag = join("\n", map { $i++ . ": $_" } @matchlines);
+            return "'$backself<$tag>$frontself'";
+        } else {
+            return "'$backself<$self->{match}>$frontself'";
+        }
     }
 
     return "end";
@@ -241,6 +262,8 @@ sub Selection::append {
     my ($self, $txt) = @_;
 
     $self->{match} .= $txt;
+    $self->refresh_lines();
+
     return $self;
 }
 
@@ -250,6 +273,7 @@ sub Selection::extend {
     if($self->{front} =~ $pattern) {
         $self->{match} .= $` . $&;
         $self->{front} = $';
+        $self->refresh_lines();
     }
 }
 
@@ -257,6 +281,8 @@ sub Selection::modify {
     my ($self, $val) = @_;
 
     $self->{match} = $val;
+    $self->refresh_lines();
+
     return $self;
 }
 
@@ -513,7 +539,7 @@ sub block {
         return unless defined $ans;
 
         if($ans <= 0) {
-            $sel->{match} .= $proc->{back};
+            $sel->append($proc->{back});
             $sel->{front} = $proc->{front};
             return $sel;
         }
