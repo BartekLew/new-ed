@@ -654,6 +654,12 @@ sub apply_ask {
     return Result::ok();
 }
 
+sub cancel {
+    if(defined($CF)) {
+        $CF = $CF->{base};
+    }
+}
+
 sub nextm {
     if($CF) {
         $CF->next();
