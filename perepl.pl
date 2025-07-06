@@ -96,11 +96,17 @@ sub assert_eq {
 my $reader = Term::ReadLine->new('SmartPrompt');
 my $out = $reader->OUT || \*STDOUT;
 
+@File::ISA = ("Buffer");
+
 sub File::new {
     my ($class, $filename) = @_;
 
-    return bless { name => $filename } 
-                 => $class;
+    my $self = bless { 
+        name => $filename 
+    } => $class;
+
+    $self->read();
+    return $self;
 }
 
 sub File::tag {
@@ -126,11 +132,8 @@ sub File::read {
     return $self->{content};
 }
 
-sub File::append {
+sub Buffer::append {
     my ($self, $txt) = @_;
-
-    $self->read()
-        unless(defined($self->{content}));
 
     $self->{content} .= $txt;
     $self->{changed} = 1;
@@ -138,7 +141,7 @@ sub File::append {
     return $self;
 }
 
-sub File::modify {
+sub Buffer::modify {
     my ($self, $val) = @_;
 
     if($self->{content} ne $val) {
@@ -164,6 +167,40 @@ sub File::apply {
     }
 
     return $self->{base};
+}
+
+@Variable::ISA = ("Buffer");
+
+sub Variable::new {
+    my ($class, $src) = @_;
+
+    return bless {
+        ref => $src,
+        content => $$src
+    } => $class;
+
+}
+
+sub Variable::read {
+    my ($self) = @_;
+
+    return $self->{content};
+}
+
+sub Variable::tag {
+    my ($self) = @_;
+
+    return "VAR";
+}
+
+sub Variable::apply {
+    my ($self) = @_;
+
+    if($self->{changed}) {
+        ${$self->{ref}} = $self->{content};
+    }
+
+    return undef;
 }
 
 sub Selection::new {
@@ -263,6 +300,7 @@ sub Selection::append {
 
     $self->{match} .= $txt;
     $self->refresh_lines();
+    $self->{changed} = 1;
 
     return $self;
 }
@@ -282,6 +320,7 @@ sub Selection::modify {
 
     $self->{match} = $val;
     $self->refresh_lines();
+    $self->{changed} = 1;
 
     return $self;
 }
@@ -429,7 +468,11 @@ sub Selection::read {
 sub Selection::apply {
     my ($self) = @_;
 
-    $self->{base}->modify($self->{back} . $self->{match} . $self->{front});
+    $self->{base}->modify($self->{back} . $self->{match} . $self->{front})
+        if($self->{changed});
+
+    delete $self->{changed};
+
     return $self->{base};
 }
 
@@ -571,10 +614,32 @@ test {
 };
 
 my $CF;
+my @buffers;
+
+sub switch_buff {
+    my($buff) = @_;
+
+    if(defined $CF) {
+        push(@buffers, $CF);
+    }
+    
+    $CF = $buff;
+}
+
 sub edit {
     my ($name) = @_;
 
-    return $CF = File->new($name);
+    switch_buff(File->new($name));
+}
+
+my %funsrc;
+
+sub funed {
+    my ($name) = @_;
+
+    if(defined($funsrc{$name})) {
+        switch_buff($funsrc{$name});
+    }
 }
 
 sub sel {
@@ -583,7 +648,7 @@ sub sel {
     die "You must open a file first (use edit)"
         unless defined $CF;
 
-    $CF = new Selection($CF, $selector)->next();
+    switch_buff(new Selection($CF, $selector)->next());
     return $CF;
 }
 
@@ -644,6 +709,11 @@ sub apply {
     return 0 unless defined $CF;
     
     $CF = $CF->apply();
+
+    if(!defined $CF && @buffers) {
+        $CF = pop(@buffers);
+    }
+
     $CF->indent() if ($autoindent && ref($CF) eq "Selection");
     return $CF->tag() if ref($CF);
 }
@@ -657,12 +727,11 @@ sub apply_ask {
 
         if(lc($&) eq "y") {
             apply();
-            return Result::terminate(0);
         } elsif (lc($&) eq "n") {
-            return Result::terminate(0);
+            cancel();
+        } else {
+            return Result::ok();
         }
-
-        return Result::ok();
     }
 
     return Result::terminate(0)
@@ -672,9 +741,18 @@ sub apply_ask {
     return Result::ok();
 }
 
+sub commit {
+    if(defined($CF)) {
+        eval $CF->read();
+    }
+}
+
 sub cancel {
     if(defined($CF)) {
         $CF = $CF->{base};
+        if(@buffers) {
+            $CF = pop(@buffers);
+        }
     }
 }
 
@@ -740,8 +818,13 @@ sub Prompt::run {
         return Result::failed($@);
     } elsif ($ans) {
         print "\$_ = $ans\n";
-        $_ = $ans;
     }
+
+    if($line =~ m/^\s*sub\s+(\w+)/) {
+        $funsrc{$1} = new Variable(\$line);
+    }
+
+    $_ = $ans;
 
     return Result::ok($ans);
 }
