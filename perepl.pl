@@ -368,7 +368,7 @@ sub LevelScanner::level_change {
             } else {
                 $dlev--;
             }
-        } elsif ($match =~ m/$self->{line_limiters}/ && $front =~ m/^\s*$/) {
+        } elsif ($match =~ m/$self->{line_limiters}/ && $front =~ m/^\s*(#[^\n]*)?$/) {
             $terminated = 1;
         } elsif ($match =~ m/$self->{ignorables}/) {
             print "ignorable: $match\n";
@@ -425,8 +425,8 @@ test {
                 "  foo\n      bar, baz;");
     test_indent("sub foo {\n my \$bar = \$_;\n     }",
                 "sub foo {\n    my \$bar = \$_;\n}");
-    test_indent("sub foo {\n my \$bar = '\\}';\nassert_eq(\$foo,\n'\\}'\n);\n}",
-                "sub foo {\n    my \$bar = '\\}';\n    assert_eq(\$foo,\n        '\\}'\n    );\n}");
+    test_indent("sub foo {\n my \$bar = '\\}'; #foobar\nassert_eq(\$foo,\n'\\}'\n);\n}",
+                "sub foo {\n    my \$bar = '\\}'; #foobar\n    assert_eq(\$foo,\n        '\\}'\n    );\n}");
     test_indent('
 sub File::apply {
 my ($self) = @_;
