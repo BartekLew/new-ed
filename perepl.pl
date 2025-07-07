@@ -535,7 +535,7 @@ sub expect_delimiter {
 
         my $base_scanner = $ctx->{scanner};
         $ctx->{level}++;
-        $ctx->{scanner} = new Scanner('\\.' => \&noop,
+        $ctx->{scanner} = new Scanner('\\\\.' => \&noop,
                                       $delimiter => sub {
                                           my ($ctx) = @_;
                                           $ctx->{level}--;
@@ -571,6 +571,11 @@ my $perl_scanner = new Scanner(
 
         return $ctx->{level};
     });
+
+test {
+    my $proc = $perl_scanner->scan(qq[extend("'\\"")]);
+    assert_eq($proc->drain(), 0);
+};
 
 sub block {
     my ($sel) = @_;
