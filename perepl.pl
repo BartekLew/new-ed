@@ -285,10 +285,10 @@ sub Selection::tag {
         if(ref($self->{base}) eq "File") {
             my @matchlines = split("\n", $self->{match});
             my $i = $self->{line};
-            my $tag = join("\n", map { $i++ . ": $_" } @matchlines);
-            return "'$backself<$tag>$frontself'";
+            my $tag = join("\n", map { s/\e/[33m^ESC[0m/g; $i++ . ": $_" } @matchlines);
+            return "[90m$backself[0m$tag[90m$frontself[0m";
         } else {
-            return "'$backself<$self->{match}>$frontself'";
+            return "[90m$backself[0m$self->{match}[90m$frontself[0m";
         }
     }
 
@@ -672,7 +672,7 @@ sub line {
     if(defined($CF)) {
         $no -= $CF->{line} if ref($CF) eq "Selection";
         sel("[^\n]*\n");
-        while(--$no > 0) { $CF->next() }
+        while($no-- > 0) { $CF->next() }
     }
 }
 
@@ -844,7 +844,16 @@ for my $rc_path ('.perepl', "$ENV{HOME}/.perepl") {
 my $main_prompt = new Prompt(
     prompt => sub {
         if(defined $CF) {
-            return "\n\$CF=" . $CF->tag() . "> ";
+            if(ref($CF) eq "Selection") {
+                print "\n" . $CF->tag() . "\n";
+                my $cur = $CF;
+                $cur = $cur->{base}
+                    while($cur && ref($cur) eq "Selection");
+                
+                return '$CF=' . $cur->tag() . "> ";
+            } else {
+                return "\n\$CF=" . $CF->tag() . "> ";
+            }
         } else {
             return "\n> ";
         }
