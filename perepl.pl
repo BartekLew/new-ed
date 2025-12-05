@@ -19,13 +19,30 @@ sub test(&) {
 sub Result::ok {
     my ($val) = @_;
 
-    return bless {val => $val} => "Result";
+    return bless {val => ($val || 1)} => "Result";
 }
 
 sub Result::failed {
     my ($msg) = @_;
 
     return bless { err => $msg } => "Result";
+}
+
+sub Result::failed_if {
+    my ($fn) = @_;
+
+    my $ans = $fn->();
+    if($ans) {
+        return Result::ok();
+    } else {
+        return Result::failed($ans);
+    }
+}
+
+sub Result::is_ok {
+    my ($self) = @_;
+
+    return $self->{val};
 }
 
 sub Result::terminate {
@@ -39,6 +56,22 @@ sub Result::map {
     if(defined $self->{val}) {
         local $_ = $self->{val};
         $self->{val} = $fun->();
+    }
+
+    return $self;
+}
+
+sub Result::then {
+    my ($self, $then, $else) = @_;
+
+    if(defined $self->{val}) {
+        local $_ = $self->{val};
+        return $then->();
+    }
+
+    if($else) {
+        local $_ = $self->{err};
+        return $else->();
     }
 
     return $self;
@@ -109,6 +142,13 @@ sub File::new {
     return $self;
 }
 
+sub File::commited_with {
+    my ($self, $commiter) = @_;
+
+    $self->{commiter} = $commiter;
+    return $self;
+}
+
 sub File::tag {
     my ($self) = @_;
 
@@ -144,6 +184,11 @@ sub Buffer::append {
 sub Buffer::modify {
     my ($self, $val) = @_;
 
+    if(ref($val) eq "CODE") {
+        local $_ = $self->{content};
+        $val = $val->();
+    }
+
     if($self->{content} ne $val) {
         $self->{content} = $val;
         $self->{changed} = 1;
@@ -164,6 +209,18 @@ sub File::apply {
         delete $self->{changed};
 
         close($fh);
+
+        if(defined $self->{commiter}) {
+            local $_ = $self;
+            $self->{commit_result} = $self->{commiter}->();
+            
+            if(!$self->{commit_result}->is_ok()) {
+                print STDERR "Commiting changes in '$self->{name}' failed:\n$self->{commit_result}->{err}\n";
+                return $self;
+            } else {
+                return $self->{base};
+            }
+        }
     }
 
     return $self->{base};
@@ -318,7 +375,13 @@ sub Selection::extend {
 sub Selection::modify {
     my ($self, $val) = @_;
 
-    $self->{match} = $val;
+    if(ref($val) eq "CODE") {
+        local $_ = $self->{match};
+        $self->{match} = $val->();
+    } else {
+        $self->{match} = $val;
+    }
+
     $self->refresh_lines();
     $self->{changed} = 1;
 
@@ -834,13 +897,6 @@ sub Prompt::run {
     return Result::ok($ans);
 }
 
-for my $rc_path ('.perepl', "$ENV{HOME}/.perepl") {
-    if(open(my $rc, $rc_path)) {
-        eval(join("", <$rc>));
-        close($rc);
-    }
-}
-
 my $main_prompt = new Prompt(
     prompt => sub {
         if(defined $CF) {
@@ -864,6 +920,81 @@ my $main_prompt = new Prompt(
         return Result::ok();
     }
 );
+
+sub eval_file {
+    my ($name) = @_;
+
+    my $in;
+    return Result::failed_if(sub { open($in, $name) })
+                 ->then(sub {
+                        my $code = join("\n", <$in>);
+                        my $ret = eval($code);
+    
+                        if(defined $ret) {
+                            print STDERR "Warnings from $name:\n$@\n"
+                                if $@;
+    
+                            return Result::ok($name);
+                        } else {
+                            return Result::failed($@);
+                        }
+                    });
+}
+
+my $loader_prompt = new Prompt(%$main_prompt,
+                    on_terminated => sub {
+                        if(!defined $CF->{base}) {
+                            my $new_cf = $CF->apply();
+                            if($new_cf//0 == $CF) {
+                                print STDERR "Do you want to continue? [y/n] ";
+                                my $ans = <STDIN>;
+
+                                if($ans =~ m/^\s*n\s*$/i) {
+                                    return Result::terminate(1);
+                                } else {
+                                    return Result::ok();
+                                }
+                            } else {
+                                $CF = $new_cf;
+                                return Result::terminate(0);
+                            }
+                        } else {
+                            $CF = $CF->apply();
+                            return Result::ok();
+                        }
+                    });
+                    
+sub load_file {
+    my ($name) = @_;
+
+    eval_file($name)
+        ->then(sub { },
+               sub { 
+                   print STDERR "Fix in '$name':\n$_";
+                   edit($name);
+                   $CF->commited_with(sub {
+                        my $ret = eval($_->{content});
+                        if(defined $ret) {
+                            return Result::ok($ret);
+                        } else {
+                            return Result::failed($@);
+                        }
+                   });
+
+                   my $ans;
+                   while(!defined($ans = $loader_prompt->run()->{terminate})) {}
+
+                   if($ans == 1) {
+                       die "File not fixed, aborting";
+                   }
+                });
+}
+
+for my $rc_path ('.perepl', "$ENV{HOME}/.perepl") {
+    if(-e $rc_path) {
+        load_file($rc_path);
+    }
+}
 
 while(!defined($main_prompt->run()->{terminate})) {
 }
