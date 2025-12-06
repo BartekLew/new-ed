@@ -16,6 +16,18 @@ sub test(&) {
     $fun->();
 }
 
+sub list_of(&$) {
+    my ($code, $init) = @_;
+
+    my @ans = ($init);
+    my $next = $init;
+    while($next = $code->(local $_ = $next)) {
+        push(@ans, $next);
+    }
+
+    return @ans;
+}
+
 sub Result::ok {
     my ($val) = @_;
 
@@ -285,7 +297,7 @@ sub Selection::refresh_lines {
 sub Selection::next {
     my ($self) = @_;
 
-    if ($self->{front} && $self->{front} =~ $self->{pattern}) {
+    if ($self->{front} && $self->{front} =~ m/$self->{pattern}/) {
         my $back = $`;
         $self->{back} .= $self->{match} . $back;
         $self->{match} = $&;
@@ -606,6 +618,7 @@ sub expect_delimiter {
                                       });
     };
 }
+
 my $perl_scanner = new Scanner(
     '\b(m)([/!@#\$])' => sub { # regex
         my ($ctx, $back, $match, $front) = @_;
@@ -650,7 +663,7 @@ sub block {
         return unless defined $ans;
 
         if($ans <= 0) {
-            $sel->append($proc->{back});
+            $sel->{match} .= $proc->{back};
             $sel->{front} = $proc->{front};
             return $sel;
         }
@@ -839,6 +852,38 @@ sub Prompt::new {
     return $obj;
 }
 
+sub eval_prompt_macros {
+    my ($line) = @_;
+
+    if($line =~ m#^\s*(\w*)/((\\.|[^/])*)(\s*$|/(.*))#) {
+        my ($cmd, $param, $rest) = ($1, $2, $4);
+        if(!$cmd || $cmd eq "m") {
+            return "sel('$param');";
+        }
+        elsif($cmd eq "s") {
+            $rest =~ m#/(.*)(/|$)#;
+            $rest = $1 || "";
+            return "\$CF->modify(sub{s/$param/$rest/g; \$_});";
+        } elsif ($cmd eq "a") {
+            return "\$CF->append('$param');";
+        } elsif ($cmd eq "i") {
+            return "\$CF->modify(sub{\"$param\" . \$_});";
+        } elsif ($cmd eq "r") {
+            return "\$CF->modify(\"$param\");";
+        } elsif ($cmd eq "d") {
+            if($CF->{match} !~ m/\n$/) {
+                $CF->extend("\n");
+            }
+
+            $CF->modify("");
+            $CF->next();
+            return 1;
+        } elsif ($cmd eq "e") {
+            $CF->extend($param||"\n");
+        }
+    } 
+}
+
 sub Prompt::read_command {
     my ($self) = @_;
 
@@ -855,6 +900,9 @@ sub Prompt::read_command {
     }
 
     return $self->{default}->($self) unless $line;
+
+    my $ret = eval_prompt_macros($line);
+    return $ret if $ret;
 
     my $proc = $perl_scanner->scan($line);
     while($proc->drain() > 0) {
