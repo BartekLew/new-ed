@@ -273,11 +273,15 @@ sub Variable::apply {
 }
 
 sub Selection::new {
-    my ($class, $base, $pattern) = @_;
+    my ($class, $base, $pattern, $capture) = @_;
 
+    $capture = [$capture]
+        if($capture && ref($capture) ne "ARRAY");
+        
     return bless {
         base => $base,
         pattern => $pattern,
+        capture => $capture,
         line => 1,
         sel_lines => 0,
 
@@ -302,6 +306,12 @@ sub Selection::next {
         $self->{back} .= $self->{match} . $back;
         $self->{match} = $&;
         $self->{front} = $';
+
+        if(defined $self->{capture}) {
+            for(my $i = 0; $i < @{$self->{capture}}; $i++) {
+                $self->{$self->{capture}->[$i]} = eval('$'. ($i+1));
+            }
+        }
 
         my @nls = $back =~ m/\n/g;
         $self->{line} += @nls + $self->{sel_lines};
@@ -398,6 +408,21 @@ sub Selection::modify {
     $self->{changed} = 1;
 
     return $self;
+}
+
+sub Selection::as_list {
+    my ($self, $mapper) = @_;
+
+    my @ans;
+    while($self->next(), my $x = $self->{match}) {
+        if(defined $mapper) {
+            local $_ = $x;
+            $x = $mapper->();
+        }
+        push(@ans, $x);
+    }
+
+    return @ans;
 }
 
 sub LevelScanner::new {
