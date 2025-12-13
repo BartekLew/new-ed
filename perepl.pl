@@ -3,7 +3,30 @@
 use strict;
 use warnings;
 use Term::ReadLine;
-use Data::Dumper;
+
+sub UNIVERSAL::DISPLAY {
+    my ($self,@visited) = @_;
+
+    return "(...)" if (ref($self) && grep { $self == $_ } @visited);
+
+    return "(undef)" if !defined $self;
+
+    if(defined &{ref($self) . "::DISPLAY"}) {
+        return $self->DISPLAY(@visited);
+    }
+
+    if(UNIVERSAL::isa($self, "HASH")) {
+        my $bless = (ref($self) eq "HASH")?"":ref($self);
+        return $bless . "{ " . join(",", map { "$_ => " . UNIVERSAL::DISPLAY($self->{$_}, @visited, $self) }
+                                         keys %$self)
+                          . "}";
+    } elsif (UNIVERSAL::isa($self, "ARRAY")) {
+        my $bless = (ref($self) eq "ARRAY")?"":ref($self);
+        return $bless . "[ " . join(",", map { UNIVERSAL::DISPLAY($_, @visited, $self) } @$self) . "]";
+    }
+
+    return "'$self'";
+}
 
 my $test_start;
 sub test(&) {
@@ -941,6 +964,14 @@ sub Prompt::read_command {
     return $line;
 }
 
+sub display_all {
+    if(@_ > 1) {
+        return "( " . join(", ", map { UNIVERSAL::DISPLAY($_) } @_) ." )";
+    } else {
+        return UNIVERSAL::DISPLAY($_[0]);
+    }
+}
+
 sub Prompt::run {
     my($self) = @_;
 
@@ -953,21 +984,21 @@ sub Prompt::run {
         if $line =~ m/S/;
 
     local $_ = $ctx;
-    my $ans = eval $line;
-    if($@) {
+    my @ans = eval "no strict 'vars'; $line";
+    if(@ans == 0 && $@) {
         print STDERR $@;
         return Result::failed($@);
-    } elsif ($ans) {
-        print "\$_ = $ans\n";
+    } elsif (@ans) {
+        print "\$_ = " . display_all(@ans) . "\n";
     }
 
     if($line =~ m/^\s*sub\s+(\w+)/) {
         $funsrc{$1} = new Variable(\$line);
     }
 
-    $_ = $ans;
+    $_ = $ans[0];
 
-    return Result::ok($ans);
+    return Result::ok($ans[0]);
 }
 
 my $main_prompt = new Prompt(
@@ -1000,7 +1031,7 @@ sub eval_file {
     my $in;
     return Result::failed_if(sub { open($in, $name) })
                  ->then(sub {
-                        my $code = join("\n", <$in>);
+                        my $code = "no strict 'vars'; " . join("\n", <$in>);
                         my $ret = eval($code);
     
                         if(defined $ret) {
