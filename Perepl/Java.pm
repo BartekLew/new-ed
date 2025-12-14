@@ -1,10 +1,10 @@
-package Java;
+package Perepl::Java;
 
 use strict;
 use warnings;
 use Exporter;
 
-our @EXPORT = qw/classes methods rglob/;
+our @EXPORT = qw/classes methods rglob classes/;
 our @ISA = qw/Exporter/;
 
 sub rglob {
@@ -151,6 +151,11 @@ sub JavaProject::new {
     return bless { sources =>  [ map { new JavaSource($_) }
                                      rglob($glob // "src/**/*.java") ] }
                  => $class;
+}
+
+my $project = new JavaProject();
+sub classes {
+    return map { map { $_->{name} } @{$_->{classes}} } @{$project->{sources}}
 }
 
 1;
