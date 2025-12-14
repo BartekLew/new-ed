@@ -785,8 +785,44 @@ sub switch_buff {
     if(defined $CF) {
         push(@buffers, $CF);
     }
-    
+
     $CF = $buff;
+}
+
+sub first_that {
+    my ($filter, @array) = @_;
+
+    for(my $i = 0; $i < @array; $i++) {
+        local $_ = $array[$i];
+        return $i if($filter->());
+    }
+
+    return undef;
+}
+
+sub change_buff {
+    my ($id) = @_;
+
+    if($id !~ m/^\d+$/) {
+        $id = first_that(sub { $_ eq $id || m/$id/ }, @buffers);
+    }
+
+    if($buffers[$id]) {
+        push(@buffers, $CF);
+        $CF = $buffers[$id];
+        splice(@buffers, $id, 1);
+    }
+
+    return $CF;
+}
+
+sub stash {
+    if($CF) {
+        push(@buffers, $CF);
+        $CF = $CF->{base};
+    }
+
+    return $CF;
 }
 
 sub edit {
