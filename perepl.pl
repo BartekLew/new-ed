@@ -875,10 +875,16 @@ sub line {
 sub funs {
     my ($filter) = @_;
 
-    sel('sub\s*[\w:]*');
-    $CF->map(\&block);
-    $CF->filter(sub { $_[0]->{match} =~ m/sub\s*$filter/ })
+    my $sel = new Selection($CF, 'sub\s+([\w:]+)', "name")->next();
+
+    $sel->map(\&block);
+    $sel->filter(sub { $_[0]->{match} =~ m/sub\s*$filter/ })
         if defined $filter;
+
+    if($sel->{match}) {
+        $CF = $sel;
+    }
+    return $CF
 }
 
 sub append {
@@ -963,6 +969,7 @@ sub nextm {
     if($CF) {
         $CF->next();
     }
+    cancel() if !$CF->{match};
 }
 
 sub Prompt::new {
