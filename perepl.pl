@@ -812,7 +812,7 @@ sub sel {
         unless defined $CF;
 
     my $sel = new Selection($CF, $selector)->next();
-    switch_buff($sel) if $sel->{match};
+    $CF = $sel if $sel->{match};
 
     return $CF;
 }
@@ -892,8 +892,10 @@ sub apply_ask {
 
         if(lc($&) eq "y") {
             apply();
+            return Result::ok();
         } elsif (lc($&) eq "n") {
             cancel();
+            return Result::ok();
         } else {
             return Result::ok();
         }
@@ -915,7 +917,7 @@ sub commit {
 sub cancel {
     if(defined($CF)) {
         $CF = $CF->{base};
-        if(@buffers) {
+        if(!$CF && @buffers) {
             $CF = pop(@buffers);
         }
     }
