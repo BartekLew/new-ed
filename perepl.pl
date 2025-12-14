@@ -177,6 +177,11 @@ sub File::new {
     return $self;
 }
 
+sub File::DISPLAY {
+    my ($self) = @_;
+    return "File<$self->{name}>";
+}
+
 sub File::commited_with {
     my ($self, $commiter) = @_;
 
@@ -312,6 +317,35 @@ sub Selection::new {
         match => "",
         front => $base->read()
     } => $class;
+}
+
+sub Selection::DISPLAY {
+    my ($self) = @_;
+
+    my $root = $self->root();
+    my $fname = $root?$root->{name}:"(UNNAMED)";
+    return "Selection<$fname\@" . $self->line() .">";
+}
+
+sub Selection::line {
+    my ($self) = @_;
+
+    my $line = $self->{line};
+    while(ref($self->{base}) eq "Selection") {
+        $self = $self->{base};
+        $line += $self->{line} - 1;
+    }
+
+    return $line;
+}
+
+sub Selection::root {
+    my ($self) = @_;
+
+    my $base = $self->{base};
+    while($base && $base->{base}) { $base = $base->{base} }
+
+    return $base;
 }
 
 sub Selection::refresh_lines {
