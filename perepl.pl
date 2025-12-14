@@ -811,7 +811,9 @@ sub sel {
     die "You must open a file first (use edit)"
         unless defined $CF;
 
-    switch_buff(new Selection($CF, $selector)->next());
+    my $sel = new Selection($CF, $selector)->next();
+    switch_buff($sel) if $sel->{match};
+
     return $CF;
 }
 
