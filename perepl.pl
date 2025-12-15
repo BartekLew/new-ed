@@ -170,7 +170,8 @@ sub File::new {
     my ($class, $filename) = @_;
 
     my $self = bless { 
-        name => $filename 
+        name => $filename,
+        change_log => []
     } => $class;
 
     $self->read();
@@ -205,6 +206,7 @@ sub File::read {
             or die "Can't open file '$self->{name}' for reading";
 
         $self->{content} = join("", <$fh>);
+        $self->{change_log} = [[ 0, length($self->{content}), 0]];
         
         close($fh);
     };
@@ -212,9 +214,79 @@ sub File::read {
     return $self->{content};
 }
 
+sub Buffer::map_region {    
+    my ($self, $base_version, $back_size, $match_size, $front_size) = @_;
+
+    my @change_log = @{$self->{change_log}};
+    my @csize = @{$change_log[$base_version]};
+
+    for my $log_item (@change_log[$base_version+1..$#change_log]) {
+        my ($bs, $ms, $fs) = @$log_item;
+        my ($b, $m, $f) = @csize;
+        my $ds = $bs + $ms + $fs - $b - $m - $f;
+        @csize = @$log_item;        
+        if ($bs <= $back_size) {
+            if($ds > 0) {
+                $back_size += $ds;
+            } else {
+                my $db_max = $back_size - $bs;
+                if(-$ds > $db_max) {
+                    $back_size = $bs;
+                    $front_size += $ds + $db_max;
+                } else {
+                    $back_size += $ds;
+                }
+            }
+        } else {
+            $front_size += $ds
+        }
+    }
+
+    return $back_size, $front_size;
+}
+
+test {
+    my $buff = bless { 
+         change_log => [[0, 200, 0], [0, 20, 200], [100, 20, 100], [200, 20, 20], [100, 0, 100]]
+    } => "Buffer";
+    assert_eq(display_all($buff->map_region(0, 40, 10, 160)), "( '60', '140' )");
+    assert_eq(display_all($buff->map_region(3, 110, 20, 110)), "( '100', '80' )");
+    assert_eq(display_all($buff->map_region(0, 200, 50, 0)), "( '200', '0' )");
+};
+
+sub Buffer::read {
+    my ($self) = @_;
+
+    return $self->{content};
+}
+
+sub Buffer::paste {
+    my ($self, $sel) = @_;
+
+    my ($bs, $ms, $fs) = map { length($_) }
+                             @$sel{qw/back match front/};
+
+    my @mapping = $self->map_region($sel->{base_version}, $bs, $ms, $fs);
+    
+    $self->modify($sel->read(), @mapping);
+}
+
+test {
+    my $base = bless { change_log => [[0, 10, 0]], content => "Foobar Baz" } => "Buffer";
+    my $deriv = new Selection($base, "bar")->next();
+    $deriv->modify(" Bar");
+
+    $base->modify("Qoo", 0, 10);
+    assert_eq($base->{content}, "QooFoobar Baz");
+    $base->paste($deriv);
+
+    assert_eq($base->{content}, "QooFoo Bar Baz");
+};
+
 sub Buffer::append {
     my ($self, $txt) = @_;
 
+    push(@{$self->{change_log}}, [ length($self->{content}), length($txt), 0 ]);
     $self->{content} .= $txt;
     $self->{changed} = 1;
 
@@ -222,7 +294,7 @@ sub Buffer::append {
 }
 
 sub Buffer::modify {
-    my ($self, $val) = @_;
+    my ($self, $val, $after, $leave) = @_;
 
     if(ref($val) eq "CODE") {
         local $_ = $self->{content};
@@ -230,7 +302,15 @@ sub Buffer::modify {
     }
 
     if($self->{content} ne $val) {
-        $self->{content} = $val;
+        if(!defined($after)) {
+            $self->{content} = $val;
+        } else {
+            $self->{content} = substr($self->read(), 0, $after)
+                               . $val
+                               . substr($self->read(), -$leave);
+        }
+
+        push(@{$self->{change_log}}, [ $after//0, length($val), $leave//0 ]);
         $self->{changed} = 1;
     }
 
@@ -300,18 +380,22 @@ sub Variable::apply {
     return undef;
 }
 
+@Selection::ISA = qw/Buffer/;
 sub Selection::new {
     my ($class, $base, $pattern, $capture) = @_;
 
     $capture = [$capture]
         if($capture && ref($capture) ne "ARRAY");
-        
+
     return bless {
         base => $base,
         pattern => $pattern,
         capture => $capture,
         line => 1,
         sel_lines => 0,
+
+        change_log => [],
+        base_version => scalar(@{$base->{change_log}}) - 1,
 
         back => "",
         match => "",
@@ -363,6 +447,7 @@ sub Selection::next {
         $self->{back} .= $self->{match} . $back;
         $self->{match} = $&;
         $self->{front} = $';
+        $self->{change_log} = [ [0, length($self->{match}), 0] ];
 
         if(defined $self->{capture}) {
             for(my $i = 0; $i < @{$self->{capture}}; $i++) {
@@ -452,13 +537,22 @@ sub Selection::extend {
 }
 
 sub Selection::modify {
-    my ($self, $val) = @_;
+    my ($self, $val, $after, $leave) = @_;
 
+    my $newval;
     if(ref($val) eq "CODE") {
         local $_ = $self->{match};
-        $self->{match} = $val->();
+        $newval = $val->();
     } else {
-        $self->{match} = $val;
+        $newval = $val;
+    }
+
+    if(!defined($after)) {
+        $self->{match} = $newval;
+    } else {
+        $self->{match} = substr($self->{match}, 0, $after)
+                         . $newval
+                         . substr($self->{match}, -$leave);
     }
 
     $self->refresh_lines();
@@ -625,7 +719,7 @@ sub Selection::read {
 sub Selection::apply {
     my ($self) = @_;
 
-    $self->{base}->modify($self->{back} . $self->{match} . $self->{front})
+    $self->{base}->paste($self)
         if($self->{changed});
 
     delete $self->{changed};
