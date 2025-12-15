@@ -682,6 +682,14 @@ sub Scanning::drain {
     return $self->{level};
 }
 
+sub Scanning::DISPLAY {
+    my ($self) = @_;
+    return "Scanning<"
+        . substr($self->{back}, -10)
+        . "|" . substr($self->{front}, 0, 10)
+        . "\@$self->{level}>";
+}
+
 sub noop { return 1; }
 
 sub expect_delimiter {
@@ -1008,7 +1016,10 @@ sub eval_prompt_macros {
             $CF->next();
             return 1;
         } elsif ($cmd eq "e") {
-            $CF->extend($param||"\n");
+            eval { $CF->extend($param||"\n") };
+            print STDERR "Syntax error: $@\n"
+                if $@;
+            return 1;
         }
     } 
 }
