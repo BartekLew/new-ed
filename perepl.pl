@@ -200,15 +200,16 @@ sub File::tag {
 
 sub File::read {
     my ($self) = @_;
-   
-    unless(defined $self->{content}) {
-        open(my $fh, "$self->{name}") 
-            or die "Can't open file '$self->{name}' for reading";
 
-        $self->{content} = join("", <$fh>);
-        $self->{change_log} = [[ 0, length($self->{content}), 0]];
-        
-        close($fh);
+    unless(defined $self->{content}) {
+        if(!open(my $fh, "$self->{name}")) {
+            $self->{content} = "";
+        } else {
+            $self->{content} = join("", <$fh>);
+            $self->{change_log} = [[ 0, length($self->{content}), 0]];
+
+            close($fh);
+        }
     };
 
     return $self->{content};
@@ -786,6 +787,12 @@ sub Scanning::DISPLAY {
 
 sub noop { return 1; }
 
+sub returner {
+    my ($val) = @_;
+
+    return sub { return $val; };
+}
+
 sub expect_delimiter {
     my ($delimiter) = @_;
 
@@ -805,21 +812,33 @@ sub expect_delimiter {
 
 my $perl_scanner = new Scanner(
     '\b(m)([/!@#\$])' => sub { # regex
-        my ($ctx, $back, $match, $front) = @_;
+            my ($ctx, $back, $match, $front) = @_;
 
         my $delimiter = substr($match, 1);
         my $base_scanner = $ctx->{scanner};
         $ctx->{level}++;
         $ctx->{scanner} = new Scanner($delimiter => sub {
-                                                    my ($ctx) = @_;
-                                                    $ctx->{level}--;
-                                                    $ctx->{scanner} = $base_scanner;
-                                                });
+                my ($ctx) = @_;
+                $ctx->{level}--;
+                $ctx->{scanner} = $base_scanner;
+        });
         return 1;
     },
     '[\$@%]([a-zA-Z0-9_]+|[^{])' => \&noop, # variable
     '"' => expect_delimiter('"'), # double quote
     "'" => expect_delimiter("'"), #single quote
+    ";" => returner(";"),
+    '\(' => sub {
+        my($ctx) = @_;
+        $ctx->{level}++;
+        return $ctx->{level};
+    },
+    '\)' => sub {
+        my($ctx) = @_;
+        $ctx->{level}--;
+
+        return $ctx->{level};
+    },
     "\{" => sub {
         my($ctx) = @_;
         $ctx->{level}++;
@@ -830,7 +849,7 @@ my $perl_scanner = new Scanner(
         $ctx->{level}--;
 
         return $ctx->{level};
-    });
+});
 
 test {
     my $proc = $perl_scanner->scan(qq[extend("'\\"")]);
@@ -846,7 +865,7 @@ sub block {
         my $ans = $proc->step();
         return unless defined $ans;
 
-        if($ans <= 0) {
+        if($proc->{level} <= 0) {
             $sel->{match} .= $proc->{back};
             $sel->{front} = $proc->{front};
             return $sel;
@@ -927,6 +946,17 @@ sub stash {
     return $CF;
 }
 
+sub run {
+    my ($val) = @_;
+
+    $val //= $CF->{match};
+    if($val) {
+        my $ans = eval $val;
+        warn $@ if $@;
+        return $ans;
+    }
+}
+
 sub edit {
     my ($name) = @_;
 
@@ -977,7 +1007,7 @@ sub line {
 sub funs {
     my ($filter) = @_;
 
-    my $sel = new Selection($CF, 'sub\s+([\w:]+)', "name")->next();
+    my $sel = new Selection($CF, 'sub\s+([\w:]+)(\s*\(.+?\))?', "name")->next();
 
     $sel->map(\&block);
     $sel->filter(sub { $_[0]->{match} =~ m/sub\s*$filter/ })
@@ -988,6 +1018,38 @@ sub funs {
     }
     return $CF
 }
+sub vars {
+    my ($filter) = @_;
+
+    my $sel = new Selection($CF, 
+        '(my|our|local)\s+([\$%@]\w+)\s*=', 
+        ['scope', 'name']
+    )->next();
+
+    $sel->filter(sub { $_[0]->{name} =~ m/$filter/ });
+
+    $sel->map(sub {
+            my ($sel) = @_;
+
+            my $proc = $perl_scanner->scan($sel->{front});
+            while(1) {
+                my $ans = $proc->step();
+                if(!defined $ans || ( $ans eq ";" && $proc->{level} == 0)) {
+                    last;
+                }
+
+            }
+
+            $sel->{match} .= $proc->{back};
+            $sel->{front} = $proc->{front};
+
+            return $sel;
+    });
+
+    $CF = $sel;
+    return $CF;
+}
+
 
 sub append {
     if(ref($CF) eq "Selection") {
